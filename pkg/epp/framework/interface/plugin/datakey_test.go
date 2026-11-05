@@ -51,3 +51,9 @@ func TestDataKey_String(t *testing.T) {
 		})
 	}
 }
+
+func TestDataKey_DataType(t *testing.T) {
+	key := NewDataKey("agent-identity", "")
+	assert.Equal(t, "agent-identity", key.DataType())
+	assert.Equal(t, "agent-identity", key.WithNonEmptyProducerName("custom").DataType())
+}

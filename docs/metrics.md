@@ -1040,6 +1040,56 @@ load reported for a replacement endpoint with the same labels.
 *   **Description:** Tokens currently in flight on each endpoint — uncached prompt tokens, optionally plus estimated output tokens when the producer's `addEstimatedOutputTokens` is set.
 *   **Usage:** Per-replica token pressure, a finer load signal than request count when request sizes vary widely.
 
+### Trace capture
+
+These metrics belong to `trace-capture-producer`. They are registered only when the producer is
+configured.
+
+| Full metric name | Type | Labels | Notes |
+|---|---|---|---|
+| `llm_d_epp_trace_capture_records_written_total` | Counter | `producer_name` | Captured request trace records persisted to JSONL files. |
+| `llm_d_epp_trace_capture_records_dropped_total` | Counter | `producer_name`, `reason` | Captured request trace records dropped before persistence. |
+| `llm_d_epp_trace_capture_requests_skipped_total` | Counter | `producer_name`, `reason` | Requests skipped by trace capture. |
+| `llm_d_epp_trace_capture_rotations_total` | Counter | `producer_name` | Output JSONL file rotations performed by trace capture. |
+
+#### `llm_d_epp_trace_capture_records_written_total`
+
+*   **Type:** Counter
+*   **Labels:**
+    *   `producer_name`: string - the configured `TraceCaptureProducer` instance name.
+*   **Release Stage:** ALPHA
+*   **Description:** Captured request trace records persisted to JSONL files.
+*   **Usage:** Monitor throughput of completed trace records written to local JSONL output.
+
+#### `llm_d_epp_trace_capture_records_dropped_total`
+
+*   **Type:** Counter
+*   **Labels:**
+    *   `producer_name`: string - the configured `TraceCaptureProducer` instance name.
+    *   `reason`: string - `buffer_full`, `sink_closed`, or `write_error`.
+*   **Release Stage:** ALPHA
+*   **Description:** Captured request trace records dropped before persistence, by reason.
+*   **Usage:** Detect asynchronous sink saturation or storage write errors.
+
+#### `llm_d_epp_trace_capture_requests_skipped_total`
+
+*   **Type:** Counter
+*   **Labels:**
+    *   `producer_name`: string - the configured `TraceCaptureProducer` instance name.
+    *   `reason`: string - `sampled_out`, `no_tokens`, or `non_completed`.
+*   **Release Stage:** ALPHA
+*   **Description:** Requests skipped by trace capture, by reason.
+*   **Usage:** Distinguish intentional sampling exclusions and upstream rejections from dropped records.
+
+#### `llm_d_epp_trace_capture_rotations_total`
+
+*   **Type:** Counter
+*   **Labels:**
+    *   `producer_name`: string - the configured `TraceCaptureProducer` instance name.
+*   **Release Stage:** ALPHA
+*   **Description:** Output JSONL file rotations performed by trace capture.
+*   **Usage:** Track JSONL segment rotation frequency under configured size limits.
+
 ### KV-cache index
 
 These metrics belong to the precise-prefix-cache pipeline. Set
