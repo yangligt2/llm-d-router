@@ -47,6 +47,7 @@ The DAG order applies to every request-control hook (`PreRequest`, `ResponseBody
 | `session-id-producer` | [`sessionid`](sessionid/) | `SessionID` | Extracts a session identifier from a request header or cookie and publishes it for affinity-aware plugins. |
 | `mm-embeddings-cache-producer` | [`multimodal`](multimodal/) | `EncoderCacheMatchInfo` | Tracks which pods recently processed each multimodal input hash and scores encoder-cache affinity. |
 | `p2p-source-producer` | [`p2psource`](p2psource/) | `ReusablePrefixTokens` | Samples a P2P source, publishes a reusable-prefix floor for scheduling, and sets the source header after the computing pod is selected. |
+| `trace-capture-producer` | [`tracecapture`](tracecapture/) | - | Records anonymized KV-block prefix hashes, session/subagent tags, token counts, and request timing to rotating JSONL files for WEKA trace export; requires `token-producer` upstream. |
 
 ## Plugin ordering and dependencies
 
@@ -72,3 +73,4 @@ The framework resolves a DAG from each plugin's `Produces` and `Consumes` declar
 - [Latency Observer Producer](latencyobserver/README.md)
 - [Session ID Producer](sessionid/README.md)
 - [Multimodal Embeddings Cache Producer](multimodal/README.md)
+- [Trace Capture Producer](tracecapture/README.md)

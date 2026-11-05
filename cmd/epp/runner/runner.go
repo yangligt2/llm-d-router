@@ -117,6 +117,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/dataproducer/sessionid"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/dataproducer/sessionstate"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/dataproducer/tokenizer"
+	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/dataproducer/tracecapture"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/forwardtokens"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/headerstamp"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/parsers/anthropic"
@@ -819,6 +820,7 @@ func (r *Runner) registerInTreePlugins() {
 	// Alpha
 	fwkplugin.RegisterAsDefaultProducer(sessionstate.SessionStateProducerType, fwkplugin.StabilityAlpha, sessionstate.Factory, sessionstate.SessionStateDataKey)
 	fwkplugin.RegisterAsDefaultProducer(latencyobserver.LatencyObserverProducerType, fwkplugin.StabilityAlpha, latencyobserver.LatencyObserverFactory, attrlatency.TTFTPercentilesDataKey)
+	fwkplugin.Register(tracecapture.PluginType, fwkplugin.StabilityAlpha, tracecapture.PluginFactory)
 
 	// Latency predictor plugins
 	// Beta
