@@ -124,7 +124,10 @@ type WekaSubagentEntry struct {
 	Type         string            `json:"type"`
 	AgentID      string            `json:"agent_id"`
 	SubagentType string            `json:"subagent_type"`
+	Status       string            `json:"status"`
 	DurationMs   *int              `json:"duration_ms,omitempty"`
+	TotalTokens  *int              `json:"total_tokens,omitempty"`
+	Models       []string          `json:"models"`
 	Requests     []WekaTurnRequest `json:"requests"`
 	ToolTokens   int               `json:"tool_tokens"`
 	SystemTokens int               `json:"system_tokens"`
@@ -300,14 +303,46 @@ func groupIntoSessionBuckets(records []preparedRecord, lcpThreshold, maxIdleGapS
 		return b
 	}
 
+	parentOf := make(map[string]string)
+	for _, pr := range records {
+		r := pr.rec
+		if r.SessionID != "" && r.ParentSessionID != "" && r.ParentSessionID != r.SessionID {
+			if _, exists := parentOf[r.SessionID]; !exists {
+				parentOf[r.SessionID] = r.ParentSessionID
+			}
+		}
+	}
+	resolveRootSession := func(id string) string {
+		if id == "" {
+			return ""
+		}
+		seen := map[string]struct{}{id: {}}
+		cur := id
+		for {
+			nxt := parentOf[cur]
+			if nxt == "" || nxt == cur {
+				return cur
+			}
+			if _, cycle := seen[nxt]; cycle {
+				return id
+			}
+			seen[nxt] = struct{}{}
+			cur = nxt
+		}
+	}
+
 	lcpSeq := 0
 	for _, pr := range records {
 		r := pr.rec
-		isSubagent := r.ParentSessionID != "" || r.SubagentID != ""
+		hasDistinctParent := r.ParentSessionID != "" && r.ParentSessionID != r.SessionID
+		isSubagent := hasDistinctParent || r.SubagentID != ""
 		if isSubagent {
-			parentKey := r.ParentSessionID
+			parentKey := ""
+			if hasDistinctParent {
+				parentKey = resolveRootSession(r.ParentSessionID)
+			}
 			if parentKey == "" {
-				parentKey = r.SessionID
+				parentKey = resolveRootSession(r.SessionID)
 			}
 			if parentKey == "" {
 				parentKey = "subagent-root-" + r.SubagentID
@@ -509,16 +544,19 @@ func buildWekaTrace(idx int, b *sessionBucket, blockSize int, scope string, idMa
 		durMs := int(math.Round(max(0.0, float64(grp.endNs-grp.startNs)/1e6)))
 
 		inner := make([]WekaTurnRequest, 0, len(grp.records))
+		var subModels []string
+		seenSubModel := make(map[string]struct{})
+		subTotalTokens := 0
 		var prevSubEndSec float64
 		for i, pr := range grp.records {
 			r := pr.rec
-			relT := roundSeconds(max(0.0, float64(r.ArrivalUnixNano-grp.startNs)/1e9))
+			innerT := max(subStartSec, roundSeconds(max(0.0, float64(r.ArrivalUnixNano-traceStartNs)/1e9)))
 			apiSec := roundSeconds(max(0.0, r.APITimeSeconds))
 			thinkSec := 0.0
 			if i > 0 {
-				thinkSec = roundSeconds(max(0.0, relT-prevSubEndSec))
+				thinkSec = roundSeconds(max(0.0, innerT-prevSubEndSec))
 			}
-			prevSubEndSec = relT + apiSec
+			prevSubEndSec = innerT + apiSec
 
 			inTokens := r.TokenizedIn
 			if inTokens == 0 && r.UsageIn > 0 {
@@ -526,17 +564,27 @@ func buildWekaTrace(idx int, b *sessionBucket, blockSize int, scope string, idMa
 			}
 			totals.SubagentTokens.Input += inTokens
 			totals.SubagentTokens.Output += r.OutputTokens
+			subTotalTokens += inTokens + r.OutputTokens
+
+			m := recordModel(r.Model)
+			if _, ok := seenSubModel[m]; !ok {
+				seenSubModel[m] = struct{}{}
+				subModels = append(subModels, m)
+			}
 
 			inner = append(inner, WekaTurnRequest{
-				T:         relT,
+				T:         innerT,
 				Type:      streamTypeNormal,
-				Model:     recordModel(r.Model),
+				Model:     m,
 				In:        inTokens,
 				Out:       r.OutputTokens,
 				HashIDs:   assignHashIDs(pr.hashes),
 				APITime:   &apiSec,
 				ThinkTime: &thinkSec,
 			})
+		}
+		if len(subModels) == 0 {
+			subModels = []string{"unknown"}
 		}
 
 		entries = append(entries, WekaEntry{
@@ -545,7 +593,10 @@ func buildWekaTrace(idx int, b *sessionBucket, blockSize int, scope string, idMa
 				Type:         entryTypeSubagent,
 				AgentID:      grp.agentID,
 				SubagentType: "captured",
+				Status:       outcomeCompleted,
 				DurationMs:   &durMs,
+				TotalTokens:  &subTotalTokens,
+				Models:       subModels,
 				Requests:     inner,
 			},
 		})
