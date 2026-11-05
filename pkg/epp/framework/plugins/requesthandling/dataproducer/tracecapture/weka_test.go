@@ -79,7 +79,7 @@ func TestAssembleWekaTraces_SubagentsClassifierFilterAndLocalScope(t *testing.T)
 			ArrivalUnixNano:   12_000_000_000,
 			APITimeSeconds:    0.8,
 			FirstTokenSeconds: 0.05,
-			StreamType:        "s", // must be normalized to "n" inside WekaSubagentEntry.requests
+			StreamType:        "s",
 			Model:             "qwen-7b",
 			BlockSize:         64,
 			TokenizedIn:       130,
@@ -172,9 +172,13 @@ func TestAssembleWekaTraces_SubagentsClassifierFilterAndLocalScope(t *testing.T)
 	require.NotNil(t, sub.DurationMs)
 	assert.Equal(t, 2000, *sub.DurationMs) // 12.0s -> 14.0s = 2000ms
 	require.Len(t, sub.Requests, 2)
-	assert.Equal(t, "n", sub.Requests[0].Type)
+	assert.Equal(t, "s", sub.Requests[0].Type)
+	require.NotNil(t, sub.Requests[0].TTFT)
+	assert.InDelta(t, 0.05, *sub.Requests[0].TTFT, 1e-6)
 	assert.InDelta(t, 2.0, sub.Requests[0].T, 1e-6)
 	assert.Equal(t, []int{1, 3}, sub.Requests[0].HashIDs) // shares block 1 ("h1") with parent!
+	assert.Equal(t, "n", sub.Requests[1].Type)
+	assert.Nil(t, sub.Requests[1].TTFT)
 	assert.InDelta(t, 3.3, sub.Requests[1].T, 1e-6)
 	require.NotNil(t, sub.Requests[1].ThinkTime)
 	assert.InDelta(t, 0.5, *sub.Requests[1].ThinkTime, 1e-6)
