@@ -131,3 +131,22 @@ func TestSink_BackpressureDropsWithoutBlocking(t *testing.T) {
 	require.NoError(t, sink.Close())
 	assert.Equal(t, int64(dropped), sink.DroppedRecords())
 }
+
+func TestSink_PreExistingVolumeMountpointPermission(t *testing.T) {
+	t.Parallel()
+
+	// Pre-existing directory owned by another UID (simulated via ErrPermission on chmod) succeeds.
+	existing := filepath.Join(t.TempDir(), "mount")
+	require.NoError(t, os.MkdirAll(existing, 0o775))
+	require.NoError(t, ensureSinkDir(existing, func(string, os.FileMode) error {
+		return os.ErrPermission
+	}))
+
+	// Newly created directory must still propagate chmod failures.
+	created := filepath.Join(t.TempDir(), "fresh")
+	err := ensureSinkDir(created, func(string, os.FileMode) error {
+		return os.ErrPermission
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, os.ErrPermission)
+}

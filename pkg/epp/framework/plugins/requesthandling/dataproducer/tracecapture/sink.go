@@ -106,18 +106,15 @@ type Sink struct {
 	lastErr error
 }
 
-// NewSink creates OutputDir (mode 0700), opens the initial capture file (mode 0600),
+// NewSink creates OutputDir (mode 0700 when newly created), opens the initial capture file (mode 0600),
 // and starts the background writer goroutine bound to ctx.
 func NewSink(ctx context.Context, opts SinkOptions) (*Sink, error) {
 	if opts.OutputDir == "" {
 		return nil, errors.New("sink outputDir is required")
 	}
 	cleanDir := filepath.Clean(opts.OutputDir)
-	if err := os.MkdirAll(cleanDir, sinkDirPerm); err != nil {
-		return nil, fmt.Errorf("create trace capture outputDir %q: %w", cleanDir, err)
-	}
-	if err := os.Chmod(cleanDir, sinkDirPerm); err != nil {
-		return nil, fmt.Errorf("chmod trace capture outputDir %q: %w", cleanDir, err)
+	if err := ensureSinkDir(cleanDir, os.Chmod); err != nil {
+		return nil, err
 	}
 	root, err := os.OpenRoot(cleanDir)
 	if err != nil {
@@ -159,6 +156,23 @@ func NewSink(ctx context.Context, opts SinkOptions) (*Sink, error) {
 
 	go s.runWriter(ctx)
 	return s, nil
+}
+
+func ensureSinkDir(cleanDir string, chmodFn func(string, os.FileMode) error) error {
+	info, statErr := os.Stat(cleanDir)
+	preExisting := statErr == nil && info.IsDir()
+	if err := os.MkdirAll(cleanDir, sinkDirPerm); err != nil {
+		return fmt.Errorf("create trace capture outputDir %q: %w", cleanDir, err)
+	}
+	if err := chmodFn(cleanDir, sinkDirPerm); err != nil {
+		// Pre-existing volume mountpoints (e.g. Kubernetes emptyDir/PVC with fsGroup)
+		// are owned by root while writable by the container GID; POSIX forbids non-owner chmod.
+		if preExisting && errors.Is(err, os.ErrPermission) {
+			return nil
+		}
+		return fmt.Errorf("chmod trace capture outputDir %q: %w", cleanDir, err)
+	}
+	return nil
 }
 
 // Enqueue submits rec without blocking. Returns false when the sink is closed
