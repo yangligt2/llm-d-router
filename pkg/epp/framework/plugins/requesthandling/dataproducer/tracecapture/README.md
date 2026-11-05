@@ -106,6 +106,18 @@ When requests carry no session header, `trace-export` chains requests into sessi
      --custom-dataset-type weka_trace \
      --streaming
    ```
+   Or with `inference-perf` WEKA trace replay (`separate_subagent_session_ids: true` emits `<parent_id>::sa:<agent_id>:s<stream_index>` on `x-session-id`, which `trace-capture-producer` resolves automatically):
+   ```yaml
+   api:
+     type: chat
+     streaming: true
+     session_id_header_key: x-session-id
+   data:
+     type: weka_trace_replay
+     weka_trace_replay:
+       hf_dataset_path: "semianalysisai/cc-traces-weka-062126-256k"
+       separate_subagent_session_ids: true
+   ```
 3. Export the captured JSONL files to WEKA format:
    ```bash
    go run ./cmd/trace-export \

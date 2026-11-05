@@ -572,26 +572,18 @@ func buildWekaTrace(idx int, b *sessionBucket, blockSize int, scope string, idMa
 				subModels = append(subModels, m)
 			}
 
-			sType := r.StreamType
-			if sType != streamTypeStreaming {
-				sType = streamTypeNormal
-			}
-			var ttftPtr *float64
-			if sType == streamTypeStreaming && r.FirstTokenSeconds > 0 {
-				ttft := roundSeconds(r.FirstTokenSeconds)
-				ttftPtr = &ttft
-			}
-
+			// WekaSubagentEntry.requests in inference-perf accepts WekaNormalRequest (type "n")
+			// only, and aiperf accepts WekaNormalRequest | WekaStreamingRequest; emitting "n"
+			// without ttft satisfies both loaders.
 			inner = append(inner, WekaTurnRequest{
 				T:         innerT,
-				Type:      sType,
+				Type:      streamTypeNormal,
 				Model:     m,
 				In:        inTokens,
 				Out:       r.OutputTokens,
 				HashIDs:   assignHashIDs(pr.hashes),
 				APITime:   &apiSec,
 				ThinkTime: &thinkSec,
-				TTFT:      ttftPtr,
 			})
 		}
 		if len(subModels) == 0 {

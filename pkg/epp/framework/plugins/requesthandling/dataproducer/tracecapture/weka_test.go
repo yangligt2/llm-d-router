@@ -172,9 +172,8 @@ func TestAssembleWekaTraces_SubagentsClassifierFilterAndLocalScope(t *testing.T)
 	require.NotNil(t, sub.DurationMs)
 	assert.Equal(t, 2000, *sub.DurationMs) // 12.0s -> 14.0s = 2000ms
 	require.Len(t, sub.Requests, 2)
-	assert.Equal(t, "s", sub.Requests[0].Type)
-	require.NotNil(t, sub.Requests[0].TTFT)
-	assert.InDelta(t, 0.05, *sub.Requests[0].TTFT, 1e-6)
+	assert.Equal(t, "n", sub.Requests[0].Type)
+	assert.Nil(t, sub.Requests[0].TTFT)
 	assert.InDelta(t, 2.0, sub.Requests[0].T, 1e-6)
 	assert.Equal(t, []int{1, 3}, sub.Requests[0].HashIDs) // shares block 1 ("h1") with parent!
 	assert.Equal(t, "n", sub.Requests[1].Type)

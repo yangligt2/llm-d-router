@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,8 +47,9 @@ const (
 	outcomeCancelled = "cancelled"
 	outcomeFailed    = "failed"
 
-	streamTypeStreaming = "s"
-	streamTypeNormal    = "n"
+	streamTypeStreaming      = "s"
+	streamTypeNormal         = "n"
+	subagentSessionDelimiter = "::sa:"
 )
 
 var (
@@ -180,11 +182,19 @@ func (p *Producer) Produce(ctx context.Context, request *fwksched.InferenceReque
 	}
 	rawParentSessionID := sessionaffinity.ResolveSessionID(ctx, request, p.cfg.ParentSessionSources)
 	rawSubagentID := sessionaffinity.ResolveSessionID(ctx, request, p.cfg.SubagentSources)
+	if rawParentSessionID == "" {
+		if parent, sub := splitCompositeSubagentSessionID(rawSessionID); parent != "" {
+			rawParentSessionID = parent
+			if rawSubagentID == "" {
+				rawSubagentID = sub
+			}
+		}
+	}
 
-	// Key sampling on parent session when present so a sampled agent trace retains all subagents.
-	sampleKey := rawParentSessionID
+	// Key sampling on root session when present so a sampled agent trace retains all subagents.
+	sampleKey := rootSessionPrefix(rawParentSessionID)
 	if sampleKey == "" {
-		sampleKey = rawSessionID
+		sampleKey = rootSessionPrefix(rawSessionID)
 	}
 	if sampleKey == "" {
 		sampleKey = request.RequestID
@@ -467,4 +477,44 @@ func hasRequestTools(body *fwkrequest.InferenceRequestBody) bool {
 		}
 	}
 	return false
+}
+
+// splitCompositeSubagentSessionID extracts the immediate parent session ID and
+// normalized subagent key from "<parent>::sa:<agent_id>[:s<stream_index>]"
+// composite session identifiers emitted by inference-perf WEKA trace replay.
+func splitCompositeSubagentSessionID(sessionID string) (parentID, subagentKey string) {
+	idx := strings.LastIndex(sessionID, subagentSessionDelimiter)
+	if idx <= 0 {
+		return "", ""
+	}
+	parent := sessionID[:idx]
+	tail := sessionID[idx+len(subagentSessionDelimiter):]
+	if tail == "" {
+		return "", ""
+	}
+	agentBase := stripStreamIndexSuffix(tail)
+	if agentBase == "" {
+		return "", ""
+	}
+	return parent, parent + subagentSessionDelimiter + agentBase
+}
+
+func stripStreamIndexSuffix(s string) string {
+	idx := strings.LastIndex(s, ":s")
+	if idx <= 0 || idx+2 >= len(s) {
+		return s
+	}
+	for i := idx + 2; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return s
+		}
+	}
+	return s[:idx]
+}
+
+func rootSessionPrefix(sessionID string) string {
+	if idx := strings.Index(sessionID, subagentSessionDelimiter); idx > 0 {
+		return sessionID[:idx]
+	}
+	return sessionID
 }

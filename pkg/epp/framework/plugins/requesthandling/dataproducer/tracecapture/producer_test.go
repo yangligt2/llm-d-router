@@ -342,3 +342,76 @@ func TestProducer_LifecycleStreamingNonStreamingErrorsAndRedaction(t *testing.T)
 	assert.Equal(t, r1.SessionID, r2.ParentSessionID)
 	assert.NotEmpty(t, r2.SubagentID)
 }
+
+func TestProducer_InferencePerfCompositeSubagentSessionID(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	outDir := t.TempDir()
+	rawCfg, err := json.Marshal(map[string]any{
+		"outputDir":       outDir,
+		"blockSizeTokens": 64,
+	})
+	require.NoError(t, err)
+
+	plg, err := PluginFactory("capture", fwkplugin.StrictDecoder(rawCfg), nil)
+	require.NoError(t, err)
+	producer := plg.(*Producer)
+
+	t0 := time.Unix(1_750_000_000, 0)
+	sendCall := func(reqID, xSessionID string, offsetSec float64, tokSeed uint32) {
+		req := &fwksched.InferenceRequest{
+			RequestID:   reqID,
+			TargetModel: "Qwen/Qwen3-4B-Instruct-2507",
+			Headers:     map[string]string{"x-session-id": xSessionID},
+			Body: &fwkrequest.InferenceRequestBody{
+				Model:            "Qwen/Qwen3-4B-Instruct-2507",
+				Stream:           true,
+				TokenizedRequest: fwkrequest.NewTokenizedRequest([][]uint32{makeSeqTokens(tokSeed, 128)}),
+			},
+		}
+		require.NoError(t, producer.Produce(ctx, req, nil))
+		req.Body = req.Body.ResponsePhaseView()
+		arr := t0.Add(time.Duration(offsetSec * float64(time.Second)))
+		producer.ResponseHeader(ctx, req, &fwkrh.Response{
+			RequestID: reqID,
+			Headers:   map[string]string{reqcommon.PseudoHeaderStatus: "200"},
+		}, nil)
+		producer.ResponseBody(ctx, req, &fwkrh.Response{
+			RequestID:           reqID,
+			EndOfStream:         true,
+			Streaming:           true,
+			TerminationCause:    fwkrh.TerminationCauseNatural,
+			ReceivedTimestamp:   arr,
+			FirstTokenTimestamp: arr.Add(40 * time.Millisecond),
+			CompleteTimestamp:   arr.Add(200 * time.Millisecond),
+			Usage:               fwkrequest.Usage{PromptTokens: 128, CompletionTokens: 16},
+		}, nil)
+	}
+
+	// Simulate inference-perf separate_subagent_session_ids: true with two parallel streams (:s0, :s1)
+	// belonging to the same WekaSubagentEntry ("researcher").
+	sendCall("p1", "wekatrace0_demo", 0.0, 1)
+	sendCall("s0", "wekatrace0_demo::sa:researcher:s0", 1.0, 200)
+	sendCall("s1", "wekatrace0_demo::sa:researcher:s1", 1.1, 400)
+	sendCall("p2", "wekatrace0_demo", 3.0, 1)
+
+	require.NoError(t, producer.Close())
+
+	matches, err := filepath.Glob(filepath.Join(outDir, "capture-*.jsonl"))
+	require.NoError(t, err)
+	records, err := LoadCapturedRecords(matches)
+	require.NoError(t, err)
+	require.Len(t, records, 4)
+
+	assert.Equal(t, records[0].SessionID, records[1].ParentSessionID)
+	assert.Equal(t, records[0].SessionID, records[2].ParentSessionID)
+	assert.Equal(t, records[1].SubagentID, records[2].SubagentID)
+
+	traces, err := AssembleWekaTraces(records, AssembleOptions{HashIDScope: HashIDScopeLocal})
+	require.NoError(t, err)
+	require.Len(t, traces, 1)
+	require.Len(t, traces[0].Requests, 3) // p1, merged researcher subagent (2 turns), p2
+	require.NotNil(t, traces[0].Requests[1].Subagent)
+	assert.Len(t, traces[0].Requests[1].Subagent.Requests, 2)
+}
