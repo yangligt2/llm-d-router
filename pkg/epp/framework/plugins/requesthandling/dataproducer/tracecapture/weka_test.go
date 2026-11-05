@@ -164,14 +164,18 @@ func TestAssembleWekaTraces_SubagentsClassifierFilterAndLocalScope(t *testing.T)
 	sub := trA.Requests[1].Subagent
 	require.NotNil(t, sub)
 	assert.Equal(t, "subagent", sub.Type)
+	assert.Equal(t, "completed", sub.Status)
+	assert.Equal(t, []string{"qwen-7b"}, sub.Models)
+	require.NotNil(t, sub.TotalTokens)
+	assert.Equal(t, 385, *sub.TotalTokens)
 	assert.InDelta(t, 2.0, sub.T, 1e-6)
 	require.NotNil(t, sub.DurationMs)
 	assert.Equal(t, 2000, *sub.DurationMs) // 12.0s -> 14.0s = 2000ms
 	require.Len(t, sub.Requests, 2)
 	assert.Equal(t, "n", sub.Requests[0].Type)
-	assert.InDelta(t, 0.0, sub.Requests[0].T, 1e-6)
+	assert.InDelta(t, 2.0, sub.Requests[0].T, 1e-6)
 	assert.Equal(t, []int{1, 3}, sub.Requests[0].HashIDs) // shares block 1 ("h1") with parent!
-	assert.InDelta(t, 1.3, sub.Requests[1].T, 1e-6)
+	assert.InDelta(t, 3.3, sub.Requests[1].T, 1e-6)
 	require.NotNil(t, sub.Requests[1].ThinkTime)
 	assert.InDelta(t, 0.5, *sub.Requests[1].ThinkTime, 1e-6)
 	assert.Equal(t, []int{1, 3, 4}, sub.Requests[1].HashIDs)
@@ -405,4 +409,69 @@ func TestEndToEnd_AIPerfAgentXWekaTraceReplayFidelity(t *testing.T) {
 	assert.Equal(t, 460, got.Requests[3].Turn.In)
 	assert.Equal(t, 64, got.Requests[3].Turn.Out)
 	assert.InDelta(t, 8.0, got.Requests[3].Turn.T, 1e-6)
+}
+
+func TestAssembleWekaTraces_NestedSubagentHierarchy(t *testing.T) {
+	t.Parallel()
+
+	// Root session R spawns depth-1 subagent S1, which spawns depth-2 subagent S2.
+	// Also test self-referential ParentSessionID == SessionID on R (must stay a root turn).
+	records := []CapturedRecord{
+		{
+			RequestID:       "r1",
+			SessionID:       "root",
+			ParentSessionID: "root",
+			ArrivalUnixNano: 1_000_000_000,
+			APITimeSeconds:  1.0,
+			StreamType:      "s",
+			Model:           "qwen3-4b",
+			BlockSize:       64,
+			TokenizedIn:     128,
+			OutputTokens:    20,
+			Outcome:         "completed",
+			BlockHashes:     []string{"b1", "b2"},
+		},
+		{
+			RequestID:       "s1-1",
+			SessionID:       "sub1",
+			ParentSessionID: "root",
+			ArrivalUnixNano: 2_500_000_000,
+			APITimeSeconds:  0.8,
+			StreamType:      "s",
+			Model:           "qwen3-4b",
+			BlockSize:       64,
+			TokenizedIn:     192,
+			OutputTokens:    30,
+			Outcome:         "completed",
+			BlockHashes:     []string{"b1", "b2", "b3"},
+		},
+		{
+			RequestID:       "s2-1",
+			SessionID:       "sub2",
+			ParentSessionID: "sub1",
+			ArrivalUnixNano: 3_500_000_000,
+			APITimeSeconds:  0.6,
+			StreamType:      "s",
+			Model:           "qwen3-4b",
+			BlockSize:       64,
+			TokenizedIn:     256,
+			OutputTokens:    15,
+			Outcome:         "completed",
+			BlockHashes:     []string{"b1", "b2", "b3", "b4"},
+		},
+	}
+
+	traces, err := AssembleWekaTraces(records, AssembleOptions{HashIDScope: HashIDScopeLocal})
+	require.NoError(t, err)
+	require.Len(t, traces, 1)
+
+	tr := traces[0]
+	require.Len(t, tr.Requests, 3)
+	require.NotNil(t, tr.Requests[0].Turn)
+	require.NotNil(t, tr.Requests[1].Subagent)
+	require.NotNil(t, tr.Requests[2].Subagent)
+	assert.Equal(t, "sub1", tr.Requests[1].Subagent.AgentID)
+	assert.Equal(t, "sub2", tr.Requests[2].Subagent.AgentID)
+	assert.Equal(t, []int{1, 2, 3, 4}, tr.Requests[2].Subagent.Requests[0].HashIDs)
+	assert.Equal(t, 2, tr.Totals.SubagentCount)
 }

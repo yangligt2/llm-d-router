@@ -84,16 +84,26 @@ When requests carry no session header, `trace-export` chains requests into sessi
 
 ## End-to-End Validation with `aiperf` (AgentX / WEKA Trace)
 
-1. Deploy a small model (for example `Qwen/Qwen2.5-0.5B-Instruct`) behind `llm-d` with `token-producer` (`backend: vllm`), `trace-capture-producer` (`blockSizeTokens: 64`, `outputDir` mounted to a volume), and `--allow-experimental-plugins` on the EPP binary.
-2. Replay an AgentX WEKA trace through the `llm-d` gateway using `aiperf`, passing the served model's tokenizer so client prompt synthesis and `token-producer` `/render` tokenization align on block boundaries:
+1. Deploy a model (for example `Qwen/Qwen3-4B-Instruct-2507`) behind `llm-d` with `token-producer` (`backend: vllm`), `trace-capture-producer` (`blockSizeTokens: 64`, `outputDir` mounted to a volume), and `--allow-experimental-plugins` on the EPP binary.
+2. Replay an AgentX WEKA trace through the `llm-d` gateway using `aiperf`, passing the served model's tokenizer and enabling `AIPERF_HTTP_X_DYNAMO_SESSION_ID_FROM_CORRELATION_ID=1` so subagent spawns emit `X-Dynamo-Session-ID` and `X-Dynamo-Parent-Session-ID`:
    ```bash
-   aiperf profile \
-     --model Qwen/Qwen2.5-0.5B-Instruct \
-     --tokenizer Qwen/Qwen2.5-0.5B-Instruct \
+   AIPERF_HTTP_X_DYNAMO_SESSION_ID_FROM_CORRELATION_ID=1 aiperf profile \
+     --scenario inferencex-agentx-mvp \
+     --model Qwen/Qwen3-4B-Instruct-2507 \
+     --tokenizer Qwen/Qwen3-4B-Instruct-2507 \
      --url http://<llm-d-gateway-host>:<port> \
      --endpoint-type chat \
-     --input-file <original-weka-traces.jsonl> \
-     --custom-dataset-type mooncake_trace \
+     --benchmark-duration 900
+   ```
+   Or against a local WEKA JSONL/directory dataset:
+   ```bash
+   AIPERF_HTTP_X_DYNAMO_SESSION_ID_FROM_CORRELATION_ID=1 aiperf profile \
+     --model Qwen/Qwen3-4B-Instruct-2507 \
+     --tokenizer Qwen/Qwen3-4B-Instruct-2507 \
+     --url http://<llm-d-gateway-host>:<port> \
+     --endpoint-type chat \
+     --input-file <original-weka-traces> \
+     --custom-dataset-type weka_trace \
      --streaming
    ```
 3. Export the captured JSONL files to WEKA format:
