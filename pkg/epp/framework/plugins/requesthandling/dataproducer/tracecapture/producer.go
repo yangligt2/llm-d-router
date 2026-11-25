@@ -239,6 +239,10 @@ func (p *Producer) Produce(ctx context.Context, request *fwksched.InferenceReque
 		},
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	if _, existed := p.pluginState.ReadOrWrite(request.RequestID, stateKey, entry); !existed {
 		p.inFlight.Add(1)
 	} else {

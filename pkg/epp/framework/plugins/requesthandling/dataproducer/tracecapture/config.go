@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/requestheader/agentidentity"
+	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/requestheader/agentlineage"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/util/sessionaffinity"
 	"github.com/llm-d/llm-d-router/pkg/epp/metadata"
 )
@@ -36,11 +37,9 @@ const (
 
 	// Client and harness session/subagent correlation headers not defined in
 	// shared router packages.
-	HeaderDynamoSessionID       = "x-dynamo-session-id"
-	HeaderDynamoParentSessionID = "x-dynamo-parent-session-id"
-	HeaderCorrelationID         = "x-correlation-id"
-	HeaderSMGRoutingKey         = "x-smg-routing-key"
-	HeaderClaudeCodeAgentID     = "x-claude-code-agent-id"
+	HeaderCorrelationID     = "x-correlation-id"
+	HeaderSMGRoutingKey     = "x-smg-routing-key"
+	HeaderClaudeCodeAgentID = "x-claude-code-agent-id"
 
 	DefaultBlockSizeTokens      = 64
 	DefaultSampleRate           = 1.0
@@ -83,12 +82,14 @@ type Config struct {
 }
 
 // DefaultSessionSources returns the priority-ordered session sources used when
-// Config.SessionSources is unset.
+// Config.SessionSources is unset. OpenCode's own-session header precedes the
+// agent-identity attribute because agent-identity reads x-session-affinity,
+// which carries the parent one hop up on OpenCode subagent requests.
 func DefaultSessionSources() []sessionaffinity.SessionIDSource {
 	return []sessionaffinity.SessionIDSource{
+		{Header: agentlineage.OpenCodeSessionHeader},
 		{Attribute: agentidentity.AgentIdentityKey.DataType()},
 		{Header: sessionaffinity.DefaultSessionIDHeader},
-		{Header: HeaderDynamoSessionID},
 		{Header: HeaderCorrelationID},
 		{Header: HeaderSMGRoutingKey},
 		{Header: agentidentity.ClaudeCodeSessionHeader},
@@ -96,6 +97,15 @@ func DefaultSessionSources() []sessionaffinity.SessionIDSource {
 		{Header: agentidentity.CodexSessionHeader},
 		{Header: agentidentity.CodexSessionHeaderLegacy},
 		{Header: metadata.FlowFairnessIDKey},
+	}
+}
+
+// DefaultParentSessionSources returns the priority-ordered parent session
+// sources used when Config.ParentSessionSources is unset.
+func DefaultParentSessionSources() []sessionaffinity.SessionIDSource {
+	return []sessionaffinity.SessionIDSource{
+		{Header: agentlineage.ParentSessionHeader},
+		{Header: agentlineage.OpenCodeParentSessionHeader},
 	}
 }
 
@@ -127,9 +137,7 @@ func (c *Config) ApplyDefaults() (usedDefaultSessionSources bool) {
 		usedDefaultSessionSources = true
 	}
 	if len(c.ParentSessionSources) == 0 {
-		c.ParentSessionSources = []sessionaffinity.SessionIDSource{
-			{Header: HeaderDynamoParentSessionID},
-		}
+		c.ParentSessionSources = DefaultParentSessionSources()
 	}
 	if len(c.SubagentSources) == 0 {
 		c.SubagentSources = []sessionaffinity.SessionIDSource{

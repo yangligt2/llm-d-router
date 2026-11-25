@@ -1,5 +1,9 @@
 # Update Log
 
+## 2026-11-25
+
+* **Update**: Routed `cmd/trace-export/**` in [review_a_pull_request.md](playbooks/review_a_pull_request.md) and regenerated [`docs/review_playbook.md`](../review_playbook.md).
+
 ## 2026-11-21
 
 * **Update**: Added `Testing` guidelines and test review checks to [AGENTS.md](../../AGENTS.md#testing), clarified that `make presubmit` runs no Go tests, and updated [prepare_a_pull_request.md](playbooks/prepare_a_pull_request.md) to run targeted `-race` tests (including `make -f Makefile.coord.mk test-unit` for coordinator code) alongside `make presubmit`.

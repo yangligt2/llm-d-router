@@ -15,7 +15,7 @@
 A 256-bit secret key is generated from `crypto/rand` at plugin startup, kept in process memory only, and excluded from logs, metrics, and `/debug/plugins/state`.
 
 - **Block digests**: `HMAC-SHA256(key, domainBlock || prevDigest[32] || blockIdx || blockSize || blockTokenIDs || overlappingMMFeatures)`, truncated to 128 bits (32 hex characters).
-- **Session correlation**: `session_id` and `parent_session_id` use the same HMAC domain (`domainSession`) so subagent turns carrying `x-dynamo-parent-session-id` join to their parent session's `session_id` without persisting raw header values.
+- **Session correlation**: `session_id` and `parent_session_id` use the same HMAC domain (`domainSession`) so subagent turns carrying `x-parent-session-id` or `x-opencode-parent-session-id` join to their parent session's `session_id` without persisting raw header values.
 - **Session-consistent sampling**: Sampling hashes the root session key (`parentSessionSources` when set, else `sessionSources`, else EPP `RequestID`), keeping multi-turn conversations and their subagents intact when `0 < sampleRate < 1`.
 
 ## Configuration
@@ -33,8 +33,8 @@ A 256-bit secret key is generated from `crypto/rand` at plugin startup, kept in 
 | `flushIntervalSeconds` | `float64` | `1.0` | Periodic flush interval of the buffered file writer. |
 | `allowEstimateBackend` | `bool` | `false` | Permits `token-producer` `estimate` backend for offline/unit tests. |
 | `includeNonCompleted` | `bool` | `false` | Emits evicted, cancelled, and failed requests in addition to `completed`. |
-| `sessionSources` | `[]SessionIDSource` | `agent-identity` attr, `x-session-id`, `x-dynamo-session-id`, `x-correlation-id`, `x-smg-routing-key`, Claude/OpenCode/Codex headers, `x-llm-d-inference-fairness-id`, plus non-default `FairnessID` | Priority-ordered session identifier sources. |
-| `parentSessionSources` | `[]SessionIDSource` | `x-dynamo-parent-session-id` | Priority-ordered parent session identifier sources for subagent calls. |
+| `sessionSources` | `[]SessionIDSource` | `x-opencode-session-id`, `agent-identity` attr, `x-session-id`, `x-correlation-id`, `x-smg-routing-key`, Claude/OpenCode/Codex headers, `x-llm-d-inference-fairness-id`, plus non-default `FairnessID` | Priority-ordered session identifier sources. |
+| `parentSessionSources` | `[]SessionIDSource` | `x-parent-session-id`, `x-opencode-parent-session-id` | Priority-ordered parent session identifier sources for subagent calls. |
 | `subagentSources` | `[]SessionIDSource` | `x-claude-code-agent-id` | Priority-ordered subagent identifier sources. |
 
 ### Example `EndpointPickerConfig`
@@ -82,31 +82,10 @@ go run ./cmd/trace-export \
 
 When requests carry no session header, `trace-export` chains requests into sessions via longest-common-prefix block overlap (`--lcp-overlap-threshold`, default `0.90`).
 
-## End-to-End Validation with `aiperf` (AgentX / WEKA Trace)
+## End-to-End Validation (WEKA Trace Replay)
 
 1. Deploy a model (for example `Qwen/Qwen3-4B-Instruct-2507`) behind `llm-d` with `token-producer` (`backend: vllm`), `trace-capture-producer` (`blockSizeTokens: 64`, `outputDir` mounted to a volume), and `--allow-experimental-plugins` on the EPP binary.
-2. Replay an AgentX WEKA trace through the `llm-d` gateway using `aiperf`, passing the served model's tokenizer and enabling `AIPERF_HTTP_X_DYNAMO_SESSION_ID_FROM_CORRELATION_ID=1` so subagent spawns emit `X-Dynamo-Session-ID` and `X-Dynamo-Parent-Session-ID`:
-   ```bash
-   AIPERF_HTTP_X_DYNAMO_SESSION_ID_FROM_CORRELATION_ID=1 aiperf profile \
-     --scenario inferencex-agentx-mvp \
-     --model Qwen/Qwen3-4B-Instruct-2507 \
-     --tokenizer Qwen/Qwen3-4B-Instruct-2507 \
-     --url http://<llm-d-gateway-host>:<port> \
-     --endpoint-type chat \
-     --benchmark-duration 900
-   ```
-   Or against a local WEKA JSONL/directory dataset:
-   ```bash
-   AIPERF_HTTP_X_DYNAMO_SESSION_ID_FROM_CORRELATION_ID=1 aiperf profile \
-     --model Qwen/Qwen3-4B-Instruct-2507 \
-     --tokenizer Qwen/Qwen3-4B-Instruct-2507 \
-     --url http://<llm-d-gateway-host>:<port> \
-     --endpoint-type chat \
-     --input-file <original-weka-traces> \
-     --custom-dataset-type weka_trace \
-     --streaming
-   ```
-   Or with `inference-perf` WEKA trace replay (`separate_subagent_session_ids: true` emits `<parent_id>::sa:<agent_id>:s<stream_index>` on `x-session-id`, which `trace-capture-producer` resolves automatically):
+2. Replay a WEKA trace dataset through the `llm-d` gateway using `inference-perf` (`separate_subagent_session_ids: true` emits `<parent_id>::sa:<agent_id>:s<stream_index>` on `x-session-id`, which `trace-capture-producer` resolves automatically):
    ```yaml
    api:
      type: chat
@@ -118,6 +97,7 @@ When requests carry no session header, `trace-export` chains requests into sessi
        hf_dataset_path: "semianalysisai/cc-traces-weka-062126-256k"
        separate_subagent_session_ids: true
    ```
+   When replaying with external benchmark tools such as `aiperf` (`--custom-dataset-type weka_trace`), configure any tool-specific session or parent-session headers via `sessionSources` and `parentSessionSources` in `EndpointPickerConfig`.
 3. Export the captured JSONL files to WEKA format:
    ```bash
    go run ./cmd/trace-export \
@@ -126,6 +106,6 @@ When requests carry no session header, `trace-export` chains requests into sessi
      --hash-id-scope local
    ```
 4. Compare `/tmp/captured-weka-traces.jsonl` against `<original-weka-traces.jsonl>`:
-   - Session count and per-session turn count (including `type: "subagent"` entries when `x-dynamo-parent-session-id` or `x-claude-code-agent-id` headers are sent).
+   - Session count and per-session turn count (including `type: "subagent"` entries when `x-parent-session-id`, `x-opencode-parent-session-id`, `x-claude-code-agent-id`, or composite `::sa:` headers are sent).
    - Per-turn `len(hash_ids)` (`in // 64`) and pairwise longest-common-prefix `LCP(turn[i].hash_ids, turn[j].hash_ids)` across turns within each trace.
    - `in` and `out` token counts (accounting for chat-template framing overhead if the client replay harness wraps raw token blocks in chat messages) and relative arrival timestamps `t`.

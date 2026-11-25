@@ -31,6 +31,8 @@ import (
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwkrh "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requesthandling"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
+	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/requestheader/agentlineage"
+	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/util/sessionaffinity"
 )
 
 func TestAssembleWekaTraces_SubagentsClassifierFilterAndLocalScope(t *testing.T) {
@@ -332,10 +334,10 @@ func TestEndToEnd_AIPerfAgentXWekaTraceReplayFidelity(t *testing.T) {
 
 	for _, sc := range originalCalls {
 		headers := map[string]string{
-			HeaderDynamoSessionID: sc.sessionID,
+			sessionaffinity.DefaultSessionIDHeader: sc.sessionID,
 		}
 		if sc.parentID != "" {
-			headers[HeaderDynamoParentSessionID] = sc.parentID
+			headers[agentlineage.ParentSessionHeader] = sc.parentID
 		}
 		if sc.agentID != "" {
 			headers[HeaderClaudeCodeAgentID] = sc.agentID

@@ -189,7 +189,7 @@ func TestHasher_DomainSeparatedIDsAndDeterministicSampling(t *testing.T) {
 	assert.Empty(t, h.AnonymizeSubagentID(""))
 
 	// Session and parent-session share domain so subagent joins match parent.
-	parentRaw := "dynamo-root-session-123"
+	parentRaw := "root-session-123"
 	assert.Equal(t, h.AnonymizeSessionID(parentRaw), h.AnonymizeSessionID(parentRaw))
 	assert.NotContains(t, h.AnonymizeSessionID(parentRaw), parentRaw)
 

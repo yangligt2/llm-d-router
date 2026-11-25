@@ -36,6 +36,8 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/dataproducer/sessionid"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/dataproducer/tokenizer"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/requestheader/agentidentity"
+	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/requestheader/agentlineage"
+	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/util/sessionaffinity"
 )
 
 func TestPluginFactory_ConfigValidation(t *testing.T) {
@@ -185,12 +187,12 @@ func TestProducer_LifecycleStreamingNonStreamingErrorsAndRedaction(t *testing.T)
 	maxTok := int64(512)
 	baseTime := time.Unix(1_700_000_000, 0)
 
-	// Request 1: Streaming request with tools, x-dynamo-session-id, usage omitted -> falls back to StreamedEvents.
+	// Request 1: Streaming request with tools, x-session-id, usage omitted -> falls back to StreamedEvents.
 	req1 := &fwksched.InferenceRequest{
 		RequestID:   "uuid-req-1",
 		TargetModel: "Qwen/Qwen2.5-7B-Instruct",
 		Headers: map[string]string{
-			"x-dynamo-session-id": "secret-user-session-alpha",
+			sessionaffinity.DefaultSessionIDHeader: "secret-user-session-alpha",
 		},
 		Body: &fwkrequest.InferenceRequestBody{
 			Model:           "Qwen/Qwen2.5-7B-Instruct",
@@ -242,8 +244,8 @@ func TestProducer_LifecycleStreamingNonStreamingErrorsAndRedaction(t *testing.T)
 		RequestID:   "uuid-req-2",
 		TargetModel: "Qwen/Qwen2.5-7B-Instruct",
 		Headers: map[string]string{
-			"x-dynamo-parent-session-id": "secret-user-session-alpha",
-			"x-claude-code-agent-id":     "explore-subagent-1",
+			agentlineage.ParentSessionHeader: "secret-user-session-alpha",
+			HeaderClaudeCodeAgentID:          "explore-subagent-1",
 		},
 		Body: &fwkrequest.InferenceRequestBody{
 			Model:            "Qwen/Qwen2.5-7B-Instruct",
@@ -414,4 +416,107 @@ func TestProducer_InferencePerfCompositeSubagentSessionID(t *testing.T) {
 	require.Len(t, traces[0].Requests, 3) // p1, merged researcher subagent (2 turns), p2
 	require.NotNil(t, traces[0].Requests[1].Subagent)
 	assert.Len(t, traces[0].Requests[1].Subagent.Requests, 2)
+}
+
+func TestProducer_OpenCodeLineageAndContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	outDir := t.TempDir()
+	rawCfg, err := json.Marshal(map[string]any{
+		"outputDir":       outDir,
+		"blockSizeTokens": 64,
+	})
+	require.NoError(t, err)
+
+	plg, err := PluginFactory("capture", fwkplugin.StrictDecoder(rawCfg), nil)
+	require.NoError(t, err)
+	producer := plg.(*Producer)
+
+	// Cancelled context must abort before mutating PluginState.
+	cancelledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	cancelledReq := &fwksched.InferenceRequest{
+		RequestID:   "cancelled-req",
+		TargetModel: "Qwen/Qwen3-4B-Instruct-2507",
+		Body: &fwkrequest.InferenceRequestBody{
+			TokenizedRequest: fwkrequest.NewTokenizedRequest([][]uint32{makeSeqTokens(1, 128)}),
+		},
+	}
+	err = producer.Produce(cancelledCtx, cancelledReq, nil)
+	require.ErrorIs(t, err, context.Canceled)
+
+	t0 := time.Unix(1_750_000_000, 0)
+	// Root OpenCode turn sets x-opencode-session-id and x-session-affinity to root-oc-0.
+	rootReq := &fwksched.InferenceRequest{
+		RequestID:   "oc-root",
+		TargetModel: "Qwen/Qwen3-4B-Instruct-2507",
+		Headers: map[string]string{
+			agentlineage.OpenCodeSessionHeader:  "root-oc-0",
+			agentidentity.OpenCodeSessionHeader: "root-oc-0",
+		},
+		Body: &fwkrequest.InferenceRequestBody{
+			Stream:           true,
+			TokenizedRequest: fwkrequest.NewTokenizedRequest([][]uint32{makeSeqTokens(1, 128)}),
+		},
+	}
+	rootReq.PutAttribute(agentidentity.AgentIdentityKey, "root-oc-0")
+	require.NoError(t, producer.Produce(ctx, rootReq, nil))
+	producer.ResponseHeader(ctx, rootReq, &fwkrh.Response{
+		RequestID: rootReq.RequestID,
+		Headers:   map[string]string{reqcommon.PseudoHeaderStatus: "200"},
+	}, nil)
+	producer.ResponseBody(ctx, rootReq, &fwkrh.Response{
+		RequestID:           rootReq.RequestID,
+		EndOfStream:         true,
+		Streaming:           true,
+		TerminationCause:    fwkrh.TerminationCauseNatural,
+		ReceivedTimestamp:   t0,
+		FirstTokenTimestamp: t0.Add(30 * time.Millisecond),
+		CompleteTimestamp:   t0.Add(150 * time.Millisecond),
+		Usage:               fwkrequest.Usage{PromptTokens: 128, CompletionTokens: 12},
+	}, nil)
+
+	// Child OpenCode turn carries own session in x-opencode-session-id, parent in
+	// x-opencode-parent-session-id, and parent in agent-identity (from x-session-affinity).
+	childReq := &fwksched.InferenceRequest{
+		RequestID:   "oc-child",
+		TargetModel: "Qwen/Qwen3-4B-Instruct-2507",
+		Headers: map[string]string{
+			agentlineage.OpenCodeSessionHeader:       "child-oc-1",
+			agentlineage.OpenCodeParentSessionHeader: "root-oc-0",
+			agentidentity.OpenCodeSessionHeader:      "root-oc-0",
+		},
+		Body: &fwkrequest.InferenceRequestBody{
+			Stream:           true,
+			TokenizedRequest: fwkrequest.NewTokenizedRequest([][]uint32{makeSeqTokens(50, 128)}),
+		},
+	}
+	childReq.PutAttribute(agentidentity.AgentIdentityKey, "root-oc-0")
+	require.NoError(t, producer.Produce(ctx, childReq, nil))
+	producer.ResponseHeader(ctx, childReq, &fwkrh.Response{
+		RequestID: childReq.RequestID,
+		Headers:   map[string]string{reqcommon.PseudoHeaderStatus: "200"},
+	}, nil)
+	producer.ResponseBody(ctx, childReq, &fwkrh.Response{
+		RequestID:           childReq.RequestID,
+		EndOfStream:         true,
+		Streaming:           true,
+		TerminationCause:    fwkrh.TerminationCauseNatural,
+		ReceivedTimestamp:   t0.Add(time.Second),
+		FirstTokenTimestamp: t0.Add(1030 * time.Millisecond),
+		CompleteTimestamp:   t0.Add(1200 * time.Millisecond),
+		Usage:               fwkrequest.Usage{PromptTokens: 128, CompletionTokens: 10},
+	}, nil)
+
+	require.NoError(t, producer.Close())
+
+	matches, err := filepath.Glob(filepath.Join(outDir, "capture-*.jsonl"))
+	require.NoError(t, err)
+	records, err := LoadCapturedRecords(matches)
+	require.NoError(t, err)
+	require.Len(t, records, 2)
+
+	assert.Equal(t, records[0].SessionID, records[1].ParentSessionID)
+	assert.NotEqual(t, records[1].SessionID, records[1].ParentSessionID)
 }
